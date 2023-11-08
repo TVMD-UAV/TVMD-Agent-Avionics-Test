@@ -3,6 +3,13 @@
  * Using the SparkFun 9DoF IMU Breakout - ICM-20948 (Qwiic)
  * Using the Adafruit BMP280 Library
  * This library is for TVMD single agent flight controller
+ * 
+ ** Important note: by default the DMP functionality is disabled in the library
+ ** as the DMP firmware takes up 14301 Bytes of program memory.
+ ** To use the DMP, you will need to:
+ ** Edit ICM_20948_C.h
+ ** Uncomment line 29: #define ICM_20948_USE_DMP
+ ** Save changes
  *
  * This sketch will output the raw data from the ICM-20948
  ***************************************************************/
@@ -126,87 +133,69 @@ void setup()
 
 void loop()
 {
-  // Read any DMP data waiting in the FIFO
-  // Note:
-  //    readDMPdataFromFIFO will return ICM_20948_Stat_FIFONoDataAvail if no data is available.
-  //    If data is available, readDMPdataFromFIFO will attempt to read _one_ frame of DMP data.
-  //    readDMPdataFromFIFO will return ICM_20948_Stat_FIFOIncompleteData if a frame was present but was incomplete
-  //    readDMPdataFromFIFO will return ICM_20948_Stat_Ok if a valid frame was read.
-  //    readDMPdataFromFIFO will return ICM_20948_Stat_FIFOMoreDataAvail if a valid frame was read _and_ the FIFO contains more (unread) data.
-  icm_20948_DMP_data_t data;
-  myICM.readDMPdataFromFIFO(&data);
 
-  if ((myICM.status == ICM_20948_Stat_Ok) || (myICM.status == ICM_20948_Stat_FIFOMoreDataAvail)) // Was valid data available?
-  {
-    //SERIAL_PORT.print(F("Received data! Header: 0x")); // Print the header in HEX so we can see what data is arriving in the FIFO
-    //if ( data.header < 0x1000) SERIAL_PORT.print( "0" ); // Pad the zeros
-    //if ( data.header < 0x100) SERIAL_PORT.print( "0" );
-    //if ( data.header < 0x10) SERIAL_PORT.print( "0" );
-    //SERIAL_PORT.println( data.header, HEX );
+  if (isrFired)
+  { // If our isr flag is set then clear the interrupts on the ICM
+    isrFired = false;
 
-    if ((data.header & DMP_header_bitmap_Quat9) > 0) // We have asked for orientation data so we should receive Quat9
+    // Read any DMP data waiting in the FIFO
+    // Note:
+    //    readDMPdataFromFIFO will return ICM_20948_Stat_FIFONoDataAvail if no data is available.
+    //    If data is available, readDMPdataFromFIFO will attempt to read _one_ frame of DMP data.
+    //    readDMPdataFromFIFO will return ICM_20948_Stat_FIFOIncompleteData if a frame was present but was incomplete
+    //    readDMPdataFromFIFO will return ICM_20948_Stat_Ok if a valid frame was read.
+    //    readDMPdataFromFIFO will return ICM_20948_Stat_FIFOMoreDataAvail if a valid frame was read _and_ the FIFO contains more (unread) data.
+    icm_20948_DMP_data_t data;
+    myICM.readDMPdataFromFIFO(&data);
+
+    if ((myICM.status == ICM_20948_Stat_Ok) || (myICM.status == ICM_20948_Stat_FIFOMoreDataAvail)) // Was valid data available?
     {
-      // Q0 value is computed from this equation: Q0^2 + Q1^2 + Q2^2 + Q3^2 = 1.
-      // In case of drift, the sum will not add to 1, therefore, quaternion data need to be corrected with right bias values.
-      // The quaternion data is scaled by 2^30.
+      //SERIAL_PORT.print(F("Received data! Header: 0x")); // Print the header in HEX so we can see what data is arriving in the FIFO
+      //if ( data.header < 0x1000) SERIAL_PORT.print( "0" ); // Pad the zeros
+      //if ( data.header < 0x100) SERIAL_PORT.print( "0" );
+      //if ( data.header < 0x10) SERIAL_PORT.print( "0" );
+      //SERIAL_PORT.println( data.header, HEX );
 
-      //SERIAL_PORT.printf("Quat9 data is: Q1:%ld Q2:%ld Q3:%ld Accuracy:%d\r\n", data.Quat9.Data.Q1, data.Quat9.Data.Q2, data.Quat9.Data.Q3, data.Quat9.Data.Accuracy);
+      if ((data.header & DMP_header_bitmap_Quat9) > 0) // We have asked for orientation data so we should receive Quat9
+      {
+        // Q0 value is computed from this equation: Q0^2 + Q1^2 + Q2^2 + Q3^2 = 1.
+        // In case of drift, the sum will not add to 1, therefore, quaternion data need to be corrected with right bias values.
+        // The quaternion data is scaled by 2^30.
 
-      // Scale to +/- 1
-      double q1 = ((double)data.Quat9.Data.Q1) / 1073741824.0; // Convert to double. Divide by 2^30
-      double q2 = ((double)data.Quat9.Data.Q2) / 1073741824.0; // Convert to double. Divide by 2^30
-      double q3 = ((double)data.Quat9.Data.Q3) / 1073741824.0; // Convert to double. Divide by 2^30
-      double q0 = sqrt(1.0 - ((q1 * q1) + (q2 * q2) + (q3 * q3)));
+        //SERIAL_PORT.printf("Quat9 data is: Q1:%ld Q2:%ld Q3:%ld Accuracy:%d\r\n", data.Quat9.Data.Q1, data.Quat9.Data.Q2, data.Quat9.Data.Q3, data.Quat9.Data.Accuracy);
 
-#ifndef QUAT_ANIMATION
-      SERIAL_PORT.print(F("Q1:"));
-      SERIAL_PORT.print(q1, 3);
-      SERIAL_PORT.print(F(" Q2:"));
-      SERIAL_PORT.print(q2, 3);
-      SERIAL_PORT.print(F(" Q3:"));
-      SERIAL_PORT.print(q3, 3);
-      SERIAL_PORT.print(F(" Accuracy:"));
-      SERIAL_PORT.println(data.Quat9.Data.Accuracy);
-#else
-      // Output the Quaternion data in the format expected by ZaneL's Node.js Quaternion animation tool
-      SERIAL_PORT.print(F("{\"quat_w\":"));
-      SERIAL_PORT.print(q0, 3);
-      SERIAL_PORT.print(F(", \"quat_x\":"));
-      SERIAL_PORT.print(q1, 3);
-      SERIAL_PORT.print(F(", \"quat_y\":"));
-      SERIAL_PORT.print(q2, 3);
-      SERIAL_PORT.print(F(", \"quat_z\":"));
-      SERIAL_PORT.print(q3, 3);
-      SERIAL_PORT.println(F("}"));
-#endif
+        // Scale to +/- 1
+        double q1 = ((double)data.Quat9.Data.Q1) / 1073741824.0; // Convert to double. Divide by 2^30
+        double q2 = ((double)data.Quat9.Data.Q2) / 1073741824.0; // Convert to double. Divide by 2^30
+        double q3 = ((double)data.Quat9.Data.Q3) / 1073741824.0; // Convert to double. Divide by 2^30
+        double q0 = sqrt(1.0 - ((q1 * q1) + (q2 * q2) + (q3 * q3)));
+
+  #ifndef QUAT_ANIMATION
+        SERIAL_PORT.print(F("Q1:"));
+        SERIAL_PORT.print(q1, 3);
+        SERIAL_PORT.print(F(" Q2:"));
+        SERIAL_PORT.print(q2, 3);
+        SERIAL_PORT.print(F(" Q3:"));
+        SERIAL_PORT.print(q3, 3);
+        SERIAL_PORT.print(F(" Accuracy:"));
+        SERIAL_PORT.println(data.Quat9.Data.Accuracy);
+  #else
+        // Output the Quaternion data in the format expected by ZaneL's Node.js Quaternion animation tool
+        SERIAL_PORT.print(F("{\"quat_w\":"));
+        SERIAL_PORT.print(q0, 3);
+        SERIAL_PORT.print(F(", \"quat_x\":"));
+        SERIAL_PORT.print(q1, 3);
+        SERIAL_PORT.print(F(", \"quat_y\":"));
+        SERIAL_PORT.print(q2, 3);
+        SERIAL_PORT.print(F(", \"quat_z\":"));
+        SERIAL_PORT.print(q3, 3);
+        SERIAL_PORT.println(F("}"));
+  #endif
+      }
     }
+
+    myICM.clearInterrupts();  // This would be efficient... but not compatible with Uno
   }
-
-  if (myICM.status != ICM_20948_Stat_FIFOMoreDataAvail) // If more data is available then we should read it right away - and not delay
-  {
-    delay(10);
-  }
-
-  // if (isrFired)
-  // { // If our isr flag is set then clear the interrupts on the ICM
-  //   isrFired = false;
-  //   myICM.getAGMT();            // get the A, G, M, and T readings
-  //   printScaledAGMT(&myICM);    // This function takes into account the scale settings from when the measurement was made to calculate the values with units
-  //   myICM.clearInterrupts();  // This would be efficient... but not compatible with Uno
-  // }
-
-  // if (myICM.dataReady())
-  // {
-  //   myICM.getAGMT();         // The values are only updated when you call 'getAGMT'
-  //                            //    printRawAGMT( myICM.agmt );     // Uncomment this to see the raw values, taken directly from the agmt structure
-  //   printScaledAGMT(&myICM); // This function takes into account the scale settings from when the measurement was made to calculate the values with units
-  //   delay(30);
-  // }
-  // else
-  // {
-  //   SERIAL_PORT.println("Waiting for data");
-  //   delay(500);
-  // }
 
   // printBmpData(bmp);
 }
@@ -271,6 +260,32 @@ void initialize_icm_dmp(){
   // Reset FIFO
   success &= (myICM.resetFIFO() == ICM_20948_Stat_Ok);
 
+  // Now we're going to set up interrupts. There are a lot of options, but for this test we're just configuring the interrupt pin and enabling interrupts to tell us when new data is ready
+  /*
+    ICM_20948_Status_e  cfgIntActiveLow         ( bool active_low );
+    ICM_20948_Status_e  cfgIntOpenDrain         ( bool open_drain );
+    ICM_20948_Status_e  cfgIntLatch             ( bool latching );                          // If not latching then the interrupt is a 50 us pulse
+
+    ICM_20948_Status_e  cfgIntAnyReadToClear    ( bool enabled );                           // If enabled, *ANY* read will clear the INT_STATUS register. So if you have multiple interrupt sources enabled be sure to read INT_STATUS first
+
+    ICM_20948_Status_e  cfgFsyncActiveLow       ( bool active_low );
+    ICM_20948_Status_e  cfgFsyncIntMode         ( bool interrupt_mode );                    // Can ue FSYNC as an interrupt input that sets the I2C Master Status register's PASS_THROUGH bit
+
+    ICM_20948_Status_e  intEnableI2C            ( bool enable );
+    ICM_20948_Status_e  intEnableDMP            ( bool enable );
+    ICM_20948_Status_e  intEnablePLL            ( bool enable );
+    ICM_20948_Status_e  intEnableWOM            ( bool enable );
+    ICM_20948_Status_e  intEnableWOF            ( bool enable );
+    ICM_20948_Status_e  intEnableRawDataReady   ( bool enable );
+    ICM_20948_Status_e  intEnableOverflowFIFO   ( uint8_t bm_enable );
+    ICM_20948_Status_e  intEnableWatermarkFIFO  ( uint8_t bm_enable );
+*/
+  myICM.cfgIntActiveLow(true);  // Active low to be compatible with the breakout board's pullup resistor
+  myICM.cfgIntOpenDrain(false); // Push-pull, though open-drain would also work thanks to the pull-up resistors on the breakout
+  myICM.cfgIntLatch(true);      // Latch the interrupt until cleared
+  SERIAL_PORT.print(F("cfgIntLatch returned: "));
+  SERIAL_PORT.println(myICM.statusString());
+
   // Check success
   if (success)
   {
@@ -285,6 +300,21 @@ void initialize_icm_dmp(){
     while (1)
       ; // Do nothing more
   }
+
+  // Enable interrupts on dmp ready
+  myICM.intEnableDMP(true);
+  SERIAL_PORT.print(F("intEnableDMP returned: "));
+  SERIAL_PORT.println(myICM.statusString());
+
+  //  // Note: weirdness with the Wake on Motion interrupt being always enabled.....
+  //  uint8_t zero_0 = 0xFF;
+  //  ICM_20948_execute_r( &myICM._device, AGB0_REG_INT_ENABLE, (uint8_t*)&zero_0, sizeof(uint8_t) );
+  //  SERIAL_PORT.print("INT_EN was: 0x"); SERIAL_PORT.println(zero_0, HEX);
+  //  zero_0 = 0x00;
+  //  ICM_20948_execute_w( &myICM._device, AGB0_REG_INT_ENABLE, (uint8_t*)&zero_0, sizeof(uint8_t) );
+
+  SERIAL_PORT.println();
+  SERIAL_PORT.println(F("Configuration complete!"));
 }
 
 void initialize_icm_raw_data(){
@@ -573,15 +603,13 @@ void printScaledAGMT(ICM_20948_I2C *sensor)
 void printBmpData(Adafruit_BMP280 &bmp) {
   Serial.print(F("Temperature = "));
   Serial.print(bmp.readTemperature());
-  Serial.println(" *C");
+  Serial.print(" *C, \t");
 
   Serial.print(F("Pressure = "));
   Serial.print(bmp.readPressure());
-  Serial.println(" Pa");
+  Serial.print(" Pa, \t");
 
   Serial.print(F("Approx altitude = "));
   Serial.print(bmp.readAltitude(1013.25)); /* Adjusted to local forecast! */
   Serial.println(" m");
-
-  Serial.println();
 }
